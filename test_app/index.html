@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+  <head>
+    <title>SDK Test</title>
+  </head>
+  <body>
+    <h1>Analytics SDK Test</h1>
+    <button id="btn">Track button click</button>
+
+    <script type="module">
+      import Analytics from "./sdk-dist/index.esm.js";
+
+      Analytics.init({
+        projectKey: "test-key-123",
+        flushInterval: 3000,
+        debug: true,
+      });
+
+      document.getElementById("btn").addEventListener("click", () => {
+        Analytics.track("button_clicked", { page: "test-page" });
+      });
+    </script>
+  </body>
+</html>

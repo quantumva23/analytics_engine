@@ -1,0 +1,6 @@
+{
+  "name": "@quantumva23/analytics-sdk",
+  "version": "0.1.0",
+  "exports": "./src/index.ts",
+  "license": "MIT"
+}
