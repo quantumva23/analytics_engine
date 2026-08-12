@@ -58,10 +58,10 @@ analytics-engine/
 
 ## Week by Week Progress
 - [x] Week 1-2 — SDK built and published
-- [ ] Week 2-3 — Ingest API + Kafka queue
-- [ ] Week 3-4 — ClickHouse storage
-- [ ] Week 4-5 — React dashboard
-- [ ] Week 5-6 — Multi-tenant + deploy
+- [x] Week 2-3 — Ingest API + Kafka queue
+- [x] Week 3-4 — ClickHouse storage
+- [x] Week 4-5 — React dashboard
+- [x] Week 5-6 — Multi-tenant + deploy
 
 ## Why this project stands out
 - Real published package anyone can install
