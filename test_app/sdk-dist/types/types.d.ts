@@ -8,6 +8,7 @@ export interface AnalyticsEvent {
     name: string;
     properties?: Record<string, unknown>;
     sessionId: string;
+    userId?: string;
     timestamp: number;
     url: string;
     referrer: string;

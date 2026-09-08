@@ -1,0 +1,24 @@
+name: Publish to JSR
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'sdk/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Publish package to JSR
+        working-directory: ./sdk
+        run: npx jsr publish

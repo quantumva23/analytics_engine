@@ -22,30 +22,41 @@ class Analytics {
     }
     init() {
         this.capturePageview();
-        this.timer = setInterval(() => this.flush(), this.config.flushInterval);
-        window.addEventListener('beforeunload', () => this.flush());
+        if (typeof window !== 'undefined') {
+            this.timer = setInterval(() => this.flush(), this.config.flushInterval);
+            window.addEventListener('beforeunload', () => this.flush());
+        }
         if (this.config.debug)
-            console.log('[Analytics] initialized');
+            console.log('[Analytics] initialized with projectKey:', this.config.projectKey);
+    }
+    identify(userId, traits) {
+        this.currentUserId = userId;
+        this.track('$identify', Object.assign({ userId }, traits));
+        if (this.config.debug)
+            console.log('[Analytics] identified user:', userId);
     }
     track(name, properties) {
         const event = {
             name,
-            properties,
+            properties: properties || {},
             sessionId: getSessionId(),
+            userId: this.currentUserId,
             timestamp: Date.now(),
-            url: window.location.href,
-            referrer: document.referrer,
-            userAgent: navigator.userAgent,
+            url: typeof window !== 'undefined' ? window.location.href : '',
+            referrer: typeof document !== 'undefined' ? document.referrer : '',
+            userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
         };
         this.queue.push(event);
         if (this.config.debug)
             console.log('[Analytics] tracked:', event);
     }
     capturePageview() {
-        this.track('$pageview', {
-            title: document.title,
-            path: window.location.pathname,
-        });
+        if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+            this.track('$pageview', {
+                title: document.title,
+                path: window.location.pathname,
+            });
+        }
     }
     async flush() {
         if (this.queue.length === 0)
@@ -74,14 +85,24 @@ class Analytics {
 }
 
 let instance = null;
-var index = {
+const AnalyticsClient = {
     init(config) {
         instance = new Analytics(config);
         instance.init();
+        return instance;
+    },
+    identify(userId, traits) {
+        instance === null || instance === void 0 ? void 0 : instance.identify(userId, traits);
     },
     track(name, properties) {
         instance === null || instance === void 0 ? void 0 : instance.track(name, properties);
     },
+    flush() {
+        return instance === null || instance === void 0 ? void 0 : instance.flush();
+    },
+    getInstance() {
+        return instance;
+    },
 };
 
-export { index as default };
+export { Analytics, AnalyticsClient as default };

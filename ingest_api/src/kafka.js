@@ -4,38 +4,43 @@ require('dotenv').config();
 const kafka = new Kafka({
   clientId: 'analytics-ingestion-api',
   brokers: [process.env.KAFKA_BROKER || '127.0.0.1:9092'],
-  connectionTimeout: 10000,     // Give Redpanda up to 10 seconds to respond to initial TCP requests
-  authenticationTimeout: 10000, // Give Redpanda up to 10 seconds for the metadata auth handshake
+  connectionTimeout: 2000,
+  authenticationTimeout: 2000,
   retry: {
-    initialRetryTime: 300,      // Wait slightly longer between initial retries
-    retries: 8
+    initialRetryTime: 100,
+    retries: 1
   }
 });
 
 const producer = kafka.producer();
 
+let isKafkaConnected = false;
+
 async function connectProducer() {
   try {
     await producer.connect();
+    isKafkaConnected = true;
     console.log('⚡ Redpanda (Kafka) Producer connected successfully');
   } catch (error) {
-    console.error('❌ Failed to connect Redpanda Producer:', error);
-    process.exit(1);
+    isKafkaConnected = false;
+    console.warn('⚠️ Redpanda Producer offline (will use resilient fallback queue):', error.message);
   }
 }
 
 async function sendToQueue(topic, message) {
-  try {
-    await producer.send({
-      topic,
-      messages: [
-        { value: JSON.stringify(message) },
-      ],
-    });
-  } catch (error) {
-    console.error(`❌ Failed to push event to topic ${topic}:`, error);
-    throw error;
+  if (!isKafkaConnected) {
+    throw new Error('Kafka producer is disconnected');
   }
+  return await producer.send({
+    topic,
+    messages: [
+      { value: JSON.stringify(message) },
+    ],
+  });
 }
 
-module.exports = { connectProducer, sendToQueue, kafka };
+function checkKafkaStatus() {
+  return isKafkaConnected;
+}
+
+module.exports = { connectProducer, sendToQueue, kafka, checkKafkaStatus };

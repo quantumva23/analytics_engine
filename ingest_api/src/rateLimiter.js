@@ -4,15 +4,21 @@ require('dotenv').config();
 const redis = new IORedis({
   host: process.env.REDIS_HOST || '127.0.0.1',
   port: parseInt(process.env.REDIS_PORT || '6379', 10),
-  connectTimeout: 5000,
-  maxRetriesPerRequest: 3,
+  connectTimeout: 2000,
+  maxRetriesPerRequest: 1,
+  enableOfflineQueue: false,
 });
 
+let hasLoggedRedisError = false;
 redis.on('error', (err) => {
-  console.error('❌ Redis connection error in rateLimiter:', err.message);
+  if (!hasLoggedRedisError) {
+    console.warn('⚠️ Rate limiter Redis offline (rate limiting disabled in dev):', err.message);
+    hasLoggedRedisError = true;
+  }
 });
 
 redis.on('connect', () => {
+  hasLoggedRedisError = false;
   console.log('✅ Rate limiter connected to Redis');
 });
 

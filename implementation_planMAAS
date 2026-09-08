@@ -1,0 +1,296 @@
+# Implementation Plan: Micro-SaaS Analytics Engine & Mixpanel-Grade UI
+
+Build a complete behavioral analytics platform (a self-hosted Mixpanel/Amplitude alternative) from the browser SDK layer to the event streaming pipeline, ClickHouse columnar storage, and a React + D3.js real-time analytics dashboard.
+
+---
+
+## 1. Complete System Architecture & Detailed Flow Diagrams
+
+### Diagram 1: High-Level End-to-End Event Lifecycle
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as User on Web App
+    participant SDK as Browser SDK (@quantumva23/analytics-sdk)
+    participant Ingest as Node.js Ingest API (:4000)
+    participant Redis as Redis Cache (:6379)
+    participant Kafka as Redpanda / Kafka (:9092)
+    participant Worker as BullMQ Worker (:6379)
+    participant ClickHouse as ClickHouse DB (:8123)
+    participant Query as Query API (:5000)
+    participant Dash as React Dashboard (:5173)
+
+    User->>SDK: Clicks button / visits page
+    Note over SDK: Generates session UUID, enriches event<br/>(URL, referrer, user agent, timestamp)
+    SDK->>SDK: Queues in memory (5s debounce buffer)
+    
+    rect rgb(20, 30, 45)
+        Note over SDK,Ingest: Ingestion & Decoupling (<5ms)
+        SDK->>Ingest: POST /ingest { projectKey, events: [...] }
+        Ingest->>Redis: Check rate limit (INCR + EXPIRE 1s)
+        Redis-->>Ingest: OK (count < 100/s)
+        Ingest->>Kafka: Produce to 'analytics-raw-events'
+        Ingest-->>SDK: 202 Accepted { success: true }
+    end
+
+    rect rgb(25, 40, 30)
+        Note over Kafka,ClickHouse: Resilient Stream Processing
+        Kafka->>Worker: Consume raw event message
+        Worker->>Worker: Transform & format properties map
+        Worker->>ClickHouse: Async batch INSERT into 'events' table
+        Worker->>Query: Broadcast live-event via SSE emitter
+    end
+
+    rect rgb(40, 25, 40)
+        Note over ClickHouse,Dash: Analytics & Visualization
+        Query-->>Dash: Stream live event over SSE (/api/live)
+        Dash->>Query: GET /api/overview, POST /api/funnel, GET /api/retention
+        Query->>ClickHouse: Columnar Aggregations (uniq, uniqIf, dateDiff)
+        ClickHouse-->>Query: Ultra-fast aggregate results (<50ms)
+        Query-->>Dash: Structured JSON data
+        Dash->>Dash: Render D3 Funnel, Cohort Heatmap, KPI Trends
+    end
+```
+
+---
+
+### Diagram 2: Client SDK Internal Flow & Batching Logic
+
+```mermaid
+flowchart TD
+    Start(["Website Loads SDK Script"]) --> Init["Analytics.init({ projectKey, flushInterval: 5000 })"]
+    Init --> CheckSession{"Has valid Session ID in sessionStorage?"}
+    
+    CheckSession -- Yes --> RenewTTL["Extend Session TTL (+30 min)"]
+    CheckSession -- No --> CreateSession["Generate crypto.randomUUID() & Set 30m TTL"]
+    
+    RenewTTL --> AutoPageview["Trigger Auto $pageview Event"]
+    CreateSession --> AutoPageview
+    
+    AutoPageview --> EventQueue[("In-Memory Event Buffer []")]
+    
+    UserAction["User Action: Analytics.track(name, properties)"] --> CapturePayload["Enrich: Session ID, URL, Referrer, UserAgent, Timestamp"]
+    CapturePayload --> EventQueue
+    
+    EventQueue --> TimerTrigger{"Timer 5000ms OR window.beforeunload"}
+    
+    TimerTrigger -- Fires --> FlushBatch["Extract batch = [...queue]; queue = []"]
+    FlushBatch --> SendHTTP["POST /ingest (keepalive: true)"]
+    
+    SendHTTP --> HTTPResult{"HTTP 202 Success?"}
+    HTTPResult -- Yes --> Done(["Batch Cleared"])
+    HTTPResult -- No (Network Error) --> Requeue["queue.unshift(...batch) (Retry next cycle)"]
+    Requeue --> EventQueue
+```
+
+---
+
+### Diagram 3: Ingestion, Streaming & Storage Pipeline
+
+```mermaid
+flowchart LR
+    subgraph Client ["Client Browser"]
+        SDKBatch["SDK Batch Payload<br/>{ projectKey, events: [...] }"]
+    end
+
+    subgraph Ingestion ["Ingestion Service (:4000)"]
+        IngestEndpoint["POST /ingest"]
+        RateLimitCheck{"Redis Rate Limit<br/>> 100 req/sec?"}
+        Reject429["Return 429 Too Many Requests"]
+        Enrich["Attach Server Timestamp,<br/>Workspace ID, Client IP"]
+        Producer["Redpanda Kafka Producer"]
+    end
+
+    subgraph Messaging ["Durable Event Log & Queue"]
+        Topic[("Kafka Topic:<br/>analytics-raw-events")]
+        Consumer["Redpanda Consumer Group"]
+        BullQueue[("BullMQ Queue:<br/>clickhouse-writes<br/>(Exponential Backoff 5x)")]
+    end
+
+    subgraph Storage ["ClickHouse Columnar Database (:8123)"]
+        Worker["BullMQ Worker (15x Concurrency)"]
+        CHTable[("MergeTree Table: events<br/>ORDER BY (workspaceId, projectKey, event, timestamp)")]
+    end
+
+    subgraph LiveBus ["Real-Time Event Bus"]
+        LiveEmitter["Node.js EventEmitter"]
+        SSEEndpoint["GET /api/live (SSE Stream)"]
+    end
+
+    SDKBatch --> IngestEndpoint
+    IngestEndpoint --> RateLimitCheck
+    RateLimitCheck -- Exceeded --> Reject429
+    RateLimitCheck -- Allowed --> Enrich
+    Enrich --> Producer
+    Producer -->|Ack in <5ms| Topic
+    Topic --> Consumer
+    Consumer --> BullQueue
+    BullQueue --> Worker
+    Worker -->|Async Batch Insert| CHTable
+    Worker -->|Broadcast Event| LiveEmitter
+    LiveEmitter --> SSEEndpoint
+```
+
+---
+
+### Diagram 4: Query Engine & Analytical Visualizations
+
+```mermaid
+flowchart TD
+    subgraph Frontend ["React Dashboard (:5173)"]
+        OverviewCard["Overview Tab<br/>DAU, MAU, Trends, Top Events"]
+        FunnelCard["Funnel Builder Tab<br/>Custom Steps, Conversion %, Drop-offs"]
+        RetentionCard["Retention Matrix Tab<br/>Weekly/Daily Cohort Heatmaps"]
+        LiveCard["Live View Tab<br/>Real-Time Event Stream"]
+        ExplorerCard["Events Explorer Tab<br/>Filter by Event, Session, Custom Props"]
+        SimCard["Interactive App Simulator<br/>Live Social & SaaS User Journeys"]
+    end
+
+    subgraph BackendAPI ["Query API (:5000)"]
+        QOverview["GET /api/overview"]
+        QFunnel["POST /api/funnel { steps: [...] }"]
+        QRetention["GET /api/retention"]
+        QEvents["GET /api/events?search=&event="]
+        QLive["GET /api/live"]
+    end
+
+    subgraph ClickHouseEngine ["ClickHouse Columnar Aggregations"]
+        SQLOverview["SELECT uniq(sessionId) as dau, count() as totalEvents<br/>GROUP BY toStartOfDay(timestamp)"]
+        SQLFunnel["SELECT uniqIf(sessionId, event = 'step1'), uniqIf(sessionId, event = 'step2')<br/>(HyperLogLog distinct counts)"]
+        SQLRetention["WITH first_seen AS (min(timestamp))<br/>SELECT dateDiff('week', cohort, active)"]
+        SQLExplorer["SELECT * FROM events ORDER BY timestamp DESC LIMIT 50"]
+    end
+
+    OverviewCard <--> QOverview <--> SQLOverview
+    FunnelCard <--> QFunnel <--> SQLFunnel
+    RetentionCard <--> QRetention <--> SQLRetention
+    ExplorerCard <--> QEvents <--> SQLExplorer
+    LiveCard <--> QLive
+```
+
+---
+
+## 2. Audit of Existing Code vs. Missing / Broken Features
+
+| Component | Current State | Issues / Missing Features | Action Plan |
+| :--- | :--- | :--- | :--- |
+| **SDK** | Built & published on JSR; basic session management & batching | Missing `url`, `referrer`, custom event identification, and CDN script tag loader format | Standardize schema with `sessionId`, `url`, `referrer`, `properties`, and ensure batch support in API |
+| **Ingest API** | Handles single events; misses rate-limiting middleware activation; table schema missing `sessionId` and `url` | Ingest endpoint fails if SDK sends batch `{ projectKey, events: [...] }`; duplicate endpoints inside Ingest API and Query API | Enhance `POST /ingest` to handle both single and batched events; connect Redis rate limiter properly; fix schema |
+| **ClickHouse Schema** | Created table without `sessionId`, `url`, `referrer` | Queries in Query API failed because of mismatched columns (`session_id` vs missing `sessionId`) | Update table schema to: `event`, `projectKey`, `workspaceId`, `sessionId`, `timestamp`, `receivedAt`, `ip`, `userAgent`, `url`, `referrer`, `properties Map(String, String)` |
+| **Query API** | Minimal queries with mismatched column names; missing explorer, stats, and multi-tenant filters | Hardcoded column names caused query failures; lack of flexible time ranges (today, 7d, 30d, 90d) and property breakdowns | Overhaul query endpoints with parameterized queries, multi-range filtering, and fallback mock generator if DB is booting |
+| **Dashboard UI** | Very basic prototype styling, plain cards, basic SVG trapezoid, plain table | Visual design lacks premium polish; missing Events Explorer, interactive Funnel builder with step selector, cohort curves, SDK snippet generator, and interactive real app testing playground | Rebuild frontend into a Mixpanel-grade analytics platform with rich dark/light UI, D3 diagrams, smooth animations, live explorer, and app simulator |
+
+---
+
+## 3. Proposed Changes
+
+### Layer 1: Ingestion API & Worker (`ingest_api`)
+#### [MODIFY] [clickhouse.js](file:///c:/Users/Vishal%20Agrahari/analytics_engine/ingest_api/src/clickhouse.js)
+- Update table schema to include `sessionId`, `url`, `referrer`, `properties Map(String, String)` with compound sorting key `(workspaceId, projectKey, event, timestamp)`.
+
+#### [MODIFY] [server.js](file:///c:/Users/Vishal%20Agrahari/analytics_engine/ingest_api/src/server.js)
+- Accept both batched events payload `{ projectKey, events: [...] }` and single event `{ projectKey, event, properties }`.
+- Integrate `isRateLimited(projectKey)` check with 429 response if threshold is exceeded.
+- Decouple query endpoints (delegate all analytical queries to `query_api` or unified proxy).
+- Graceful degradation: if Redpanda is unreachable in local dev, push directly to BullMQ or memory queue.
+
+#### [MODIFY] [worker.js](file:///c:/Users/Vishal%20Agrahari/analytics_engine/ingest_api/src/worker.js)
+- Parse `sessionId`, `url`, `referrer`, format `properties` correctly for ClickHouse `Map(String, String)`.
+
+---
+
+### Layer 2: Query API (`query_api`)
+#### [MODIFY] [server.js](file:///c:/Users/Vishal%20Agrahari/analytics_engine/query_api/src/server.js)
+- Implement `/api/overview`: Support time range filters (`24h`, `7d`, `30d`), compute DAU/MAU, total events, unique sessions, average session duration, top events, device/browser distribution, and hourly/daily activity trend arrays.
+- Implement `/api/funnel`: Dynamic multistep funnel query with step dropoffs, overall conversion %, stage conversion %, and median time between steps.
+- Implement `/api/retention`: Weekly & daily cohort retention matrix with sizes and period retention rates.
+- Implement `/api/events`: Event explorer endpoint with search, pagination, event name filter, and property inspection.
+- Implement `/api/live`: Real-time SSE live event stream.
+- Provide comprehensive fallback demo dataset for all endpoints if ClickHouse is offline or empty, so UI is always interactive and functional.
+
+---
+
+### Layer 3: Client SDK & Embed Center (`sdk`, `test_app`)
+#### [MODIFY] [analytics.ts](file:///c:/Users/Vishal%20Agrahari/analytics_engine/sdk/src/analytics.ts)
+- Support custom user identification `Analytics.identify(userId, traits)`.
+- Include auto-enrichment of screen resolution, language, and URL parameters.
+
+#### [MODIFY] [test_app/index.html](file:///c:/Users/Vishal%20Agrahari/analytics_engine/test_app/index.html)
+- Upgrade local test runner with an interactive test app with simulated actions (Sign Up, Add to Cart, Purchase, Post Like, Share, Error trigger).
+
+---
+
+### Layer 4: Mixpanel-Inspired Frontend Dashboard (`dashboard`)
+#### [MODIFY] [index.css](file:///c:/Users/Vishal%20Agrahari/analytics_engine/dashboard/src/index.css) / [App.css](file:///c:/Users/Vishal%20Agrahari/analytics_engine/dashboard/src/App.css)
+- Implement Mixpanel design system tokens: sleek slate/indigo theme (`#0b0f19`, `#111827`, `#1e293b`), subtle glowing border gradients, vibrant accent colors (`#6366f1`, `#3b82f6`, `#10b981`, `#f59e0b`, `#ec4899`), glassmorphism card surfaces, and custom scrollbars.
+
+#### [MODIFY] [App.jsx](file:///c:/Users/Vishal%20Agrahari/analytics_engine/dashboard/src/App.jsx)
+- Global navigation header with workspace selector (`Production`, `Staging`, `Mobile App`), project key badge, time range picker (`Last 24 Hours`, `Last 7 Days`, `Last 30 Days`), and live connection indicator.
+- Polished sidebar with active tab glow indicators:
+  1. **Overview**
+  2. **Funnel Analysis**
+  3. **Cohort Retention**
+  4. **Live Stream**
+  5. **Events Explorer** (New)
+  6. **App Simulator / Real Testing** (New)
+  7. **SDK & Embed Center** (New)
+
+#### [MODIFY] [Overview.jsx](file:///c:/Users/Vishal%20Agrahari/analytics_engine/dashboard/src/components/Overview.jsx)
+- Mixpanel-style KPI cards with trend comparison badges (+12.4% vs last period).
+- Interactive SVG / D3 Ingestion Trend chart with hover tooltips and daily/hourly toggle.
+- Top Events distribution with interactive bar breakdown.
+- Browser & Device breakdown and Recent User Sessions table.
+
+#### [MODIFY] [Funnel.jsx](file:///c:/Users/Vishal%20Agrahari/analytics_engine/dashboard/src/components/Funnel.jsx)
+- Interactive Step Builder: Add, remove, and reorder steps from auto-suggested event names.
+- Modern visual funnel visualization with step-by-step conversion drop-off percentages, loss rates, and stage-by-stage bars.
+- Detailed step conversion metrics table (Entered, Completed, Dropped off, Conversion Rate).
+
+#### [MODIFY] [Retention.jsx](file:///c:/Users/Vishal%20Agrahari/analytics_engine/dashboard/src/components/Retention.jsx)
+- Cohort Retention Heatmap with dynamic color scaling (from translucent indigo to deep violet).
+- Line chart of cohort retention curves (Day 0 to Day 7 / Week 0 to Week 4).
+- Average retention benchmarks and summary metrics.
+
+#### [MODIFY] [Live.jsx](file:///c:/Users/Vishal%20Agrahari/analytics_engine/dashboard/src/components/Live.jsx)
+- Real-time pulsating event ticker with live counter.
+- Pause / Resume controls, filter by event name, and instant JSON inspector modal.
+
+#### [NEW] `dashboard/src/components/Explorer.jsx`
+- Searchable, filterable event log with pagination.
+- Filter by Event Name, Date Range, Session ID.
+- Expandable drawer to inspect raw event properties, browser headers, and user agent.
+
+#### [NEW] `dashboard/src/components/Simulator.jsx`
+- Interactive multi-scenario application simulator:
+  - **Scenario A: Social Media App** (Feed Scroll -> Like Post -> Comment -> Share -> Follow Creator).
+  - **Scenario B: E-Commerce Store** (View Product -> Add to Cart -> Begin Checkout -> Apply Coupon -> Complete Purchase).
+  - **Scenario C: SaaS Onboarding** (Visit Landing -> Sign Up -> Verify Email -> Create Project -> Invite Teammate -> Upgrade Plan).
+- Batch traffic generator button ("Simulate 50 User Journeys") that fires real SDK batches to the ingestion API and updates the dashboard in real-time.
+
+#### [NEW] `dashboard/src/components/SdkEmbed.jsx`
+- Interactive setup guide with copyable code snippets for:
+  - JSR / NPM package install: `npx jsr add @quantumva23/analytics-sdk`
+  - React / Next.js hook integration snippet
+  - Standalone HTML `<script>` tag snippet
+  - Project API Key management and configuration guide.
+
+---
+
+## 4. Verification Plan
+
+### Automated & Unit Verification
+1. **SDK Build Verification**:
+   - Run `npm run build` in `sdk/` and verify TypeScript compilation to ESM/CJS in `sdk/dist/`.
+2. **Ingest API Verification**:
+   - Start `ingest_api` server on port 4000.
+   - Send single event POST request and batched events POST request; verify `202 Accepted` response.
+3. **Query API Verification**:
+   - Start `query_api` server on port 5000.
+   - Verify `/api/overview`, `/api/funnel`, `/api/retention`, `/api/events`, and `/api/live` responses.
+4. **Dashboard Build & UI Verification**:
+   - Run `npm run build` in `dashboard/` to verify Vite bundle compiles with zero syntax/type errors.
+
+### Manual Verification via Browser
+- Launch Vite dev server for `dashboard/`.
+- Use the Browser tool to load `http://localhost:5173`, test navigation across all 7 tabs, run the App Simulator to trigger events, verify real-time SSE live updates, inspect the D3 funnel diagram and retention heatmap.

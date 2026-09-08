@@ -3,9 +3,11 @@ export declare class Analytics {
     private config;
     private queue;
     private timer;
+    private currentUserId?;
     constructor(config: AnalyticsConfig);
     init(): void;
+    identify(userId: string, traits?: Record<string, unknown>): void;
     track(name: string, properties?: Record<string, unknown>): void;
     private capturePageview;
-    private flush;
+    flush(): Promise<void>;
 }

@@ -1,23 +1,139 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
-    <title>SDK Test</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Analytics Engine | Live SDK Test App</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: 'Plus Jakarta Sans', sans-serif;
+        background: #090d16;
+        color: #f8fafc;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        padding: 20px;
+      }
+      .card {
+        background: rgba(17, 24, 39, 0.8);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 20px;
+        padding: 32px;
+        max-width: 520px;
+        width: 100%;
+        box-shadow: 0 20px 40px -15px rgba(0,0,0,0.6);
+      }
+      h1 { font-size: 22px; font-weight: 700; margin-bottom: 8px; color: #fff; }
+      p { font-size: 13px; color: #94a3b8; margin-bottom: 24px; line-height: 1.5; }
+      .badge {
+        display: inline-block;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 11px;
+        background: rgba(99, 102, 241, 0.15);
+        color: #818cf8;
+        border: 1px solid rgba(99, 102, 241, 0.3);
+        padding: 3px 8px;
+        border-radius: 6px;
+        margin-bottom: 16px;
+      }
+      .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+      button {
+        background: #1e293b;
+        color: #fff;
+        border: 1px solid #334155;
+        padding: 12px;
+        border-radius: 12px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      button:hover { background: #334155; border-color: #6366f1; transform: translateY(-1px); }
+      button.primary {
+        background: #6366f1;
+        border-color: #4f46e5;
+        grid-column: span 2;
+      }
+      button.primary:hover { background: #4f46e5; }
+      .log-box {
+        background: #030712;
+        border: 1px solid #1f2937;
+        border-radius: 12px;
+        padding: 12px;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 11px;
+        color: #818cf8;
+        max-height: 140px;
+        overflow-y: auto;
+      }
+      .log-line { margin-bottom: 4px; color: #cbd5e1; }
+      .log-line span { color: #34d399; }
+    </style>
   </head>
   <body>
-    <h1>Analytics SDK Test</h1>
-    <button id="btn">Track button click</button>
+    <div class="card">
+      <div class="badge">SDK Client Testbed</div>
+      <h1>Analytics Engine Live App</h1>
+      <p>Click the buttons below to trigger tracking events via <code style="color:#818cf8">@quantumva23/analytics-sdk</code>. Events batch for 3 seconds before auto-flushing to the ingestion queue.</p>
+
+      <div class="btn-grid">
+        <button id="btn-click">Track Button Click</button>
+        <button id="btn-product">View Product</button>
+        <button id="btn-cart">Add to Cart</button>
+        <button id="btn-signup">Sign Up Event</button>
+        <button class="primary" id="btn-purchase">Complete Purchase ($149)</button>
+      </div>
+
+      <div class="log-box" id="log-box">
+        <div class="log-line"><span>[Ready]</span> SDK loaded. Auto $pageview dispatched.</div>
+      </div>
+    </div>
 
     <script type="module">
       import Analytics from "./sdk-dist/index.esm.js";
 
+      const logBox = document.getElementById("log-box");
+      const addLog = (msg) => {
+        const div = document.createElement("div");
+        div.className = "log-line";
+        div.innerHTML = `<span>[${new Date().toLocaleTimeString()}]</span> ${msg}`;
+        logBox.appendChild(div);
+        logBox.scrollTop = logBox.scrollHeight;
+      };
+
       Analytics.init({
-        projectKey: "test-key-123",
+        projectKey: "proj_live_test_9876543210",
         flushInterval: 3000,
         debug: true,
       });
 
-      document.getElementById("btn").addEventListener("click", () => {
-        Analytics.track("button_clicked", { page: "test-page" });
+      document.getElementById("btn-click").addEventListener("click", () => {
+        Analytics.track("button_clicked", { button: "cta_hero", page: "home" });
+        addLog("Tracked: button_clicked");
+      });
+
+      document.getElementById("btn-product").addEventListener("click", () => {
+        Analytics.track("product_viewed", { productId: "prod_101", price: 149 });
+        addLog("Tracked: product_viewed ($149)");
+      });
+
+      document.getElementById("btn-cart").addEventListener("click", () => {
+        Analytics.track("add_to_cart", { productId: "prod_101", quantity: 1 });
+        addLog("Tracked: add_to_cart");
+      });
+
+      document.getElementById("btn-signup").addEventListener("click", () => {
+        Analytics.identify("usr_demo_491", { plan: "pro" });
+        Analytics.track("signup_completed", { method: "oauth_google" });
+        addLog("Identified user & tracked signup_completed");
+      });
+
+      document.getElementById("btn-purchase").addEventListener("click", () => {
+        Analytics.track("purchase_completed", { orderId: "ord_9901", total: 149 });
+        addLog("Tracked: purchase_completed ($149)");
       });
     </script>
   </body>
